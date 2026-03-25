@@ -165,6 +165,10 @@ def read_pdf_diplomy(path: str) -> list:
     Читає PDF-таблицю номерів дипломів.
     Структура колонок: ID | Artist | Номінація | Назва роботи | Laureate | №Диплому
     Повертає list[dict]: id, artist, laureate, num_diploma
+
+    Примітка: якщо ПІБ учасника займає 3+ рядки, текст колонки Laureate
+    ("2nd degree") може розірватись між col[4] і col[5], тому col[5] може
+    мати вигляд "e 107" замість "107". Вирішуємо через re.findall.
     """
     records = []
     print(f"📖 PDF дипломів: {os.path.basename(path)}")
@@ -175,14 +179,18 @@ def read_pdf_diplomy(path: str) -> list:
                     if not row or len(row) < 6:
                         continue
                     id_str  = str(row[0]).replace('\n', '').strip() if row[0] else ''
-                    num_str = str(row[5]).replace('\n', '').strip() if row[5] else ''
-                    if not id_str.isdigit() or not num_str.isdigit():
+                    if not id_str.isdigit():
+                        continue
+                    # Витягуємо число з col[5] через regex (може містити "e 107" тощо)
+                    num_raw = str(row[5]).replace('\n', '').strip() if row[5] else ''
+                    nums = re.findall(r'\d+', num_raw)
+                    if not nums:
                         continue
                     records.append({
                         'id':          int(id_str),
                         'artist':      str(row[1]).replace('\n', ' ').strip() if row[1] else '',
                         'laureate':    str(row[4]).replace('\n', ' ').strip() if row[4] else '',
-                        'num_diploma': int(num_str),
+                        'num_diploma': int(nums[-1]),
                     })
     print(f"   → {len(records)} записів")
     return records
@@ -191,11 +199,16 @@ def read_pdf_diplomy(path: str) -> list:
 def read_pdf_podyaky(path: str) -> list:
     """
     Читає PDF-таблицю номерів подяк.
-    Структура колонок: ID | ПІБ керівника | №Подяки
+    Формат A (3 колонки): ID | ПІБ керівника | №Подяки  — таблиця pdfplumber.
+    Формат B (5 колонок): ID | Школа | ПІБ | Товар | №Подяки — без таблиць;
+      у цьому форматі №Подяки зчитується за позицією символів (x≈288-307).
     Повертає list[dict]: id, pib_kerivnyk, num_podyaka
     """
+    from collections import defaultdict
     records = []
     print(f"📖 PDF подяк: {os.path.basename(path)}")
+
+    # --- Спроба A: табличне зчитування ---
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
             for table in (page.extract_tables() or []):
@@ -211,7 +224,41 @@ def read_pdf_podyaky(path: str) -> list:
                         'pib_kerivnyk': str(row[1]).replace('\n', ' ').strip() if row[1] else '',
                         'num_podyaka':  int(num_str),
                     })
-    print(f"   → {len(records)} записів")
+    if records:
+        print(f"   → {len(records)} записів (таблиця)")
+        return records
+
+    # --- Запасний варіант B: позиційне зчитування по символах ---
+    print("   ⚠ Таблиця не знайдена — зчитую по позиціях символів (формат B)")
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            chars = page.chars
+            rows_by_y = defaultdict(list)
+            for c in chars:
+                y = round(c['top'] / 3) * 3
+                rows_by_y[y].append(c)
+            for y in sorted(rows_by_y.keys()):
+                row_chars = sorted(rows_by_y[y], key=lambda c: c['x0'])
+                # ID: цифри при x < 105
+                id_str = ''.join(
+                    c['text'] for c in row_chars if c['x0'] < 105 and c['text'].isdigit()
+                ).strip()
+                if len(id_str) != 5:
+                    continue
+                # №Подяки: цифри при x ∈ [288, 307]
+                num_chars = sorted(
+                    [c for c in row_chars if 288 <= c['x0'] <= 307 and c['text'].isdigit()],
+                    key=lambda c: c['x0']
+                )
+                num_str = ''.join(c['text'] for c in num_chars)
+                if not num_str:
+                    continue
+                records.append({
+                    'id':           int(id_str),
+                    'pib_kerivnyk': '',   # не розрізнюється у форматі B
+                    'num_podyaka':  int(num_str),
+                })
+    print(f"   → {len(records)} записів (позиційне)")
     return records
 
 
@@ -231,18 +278,27 @@ def fuzzy_match(a: str, b: str, threshold: float = 0.75) -> bool:
     return SequenceMatcher(None, a, b).ratio() >= threshold
 
 
-def find_podyaka(pib_kerivnyk: str, podyaky_pdf: list, threshold: float = 0.75):
+def find_podyaka(pib_kerivnyk: str, podyaky_pdf: list,
+                 threshold: float = 0.75, deal_id: int = None):
     """
-    Шукає номер подяки за ПІБ керівника (fuzzy match).
-    Якщо ПІБ містить кількох осіб (через кому) — шукає по кожному.
+    Шукає номер подяки:
+      1) За deal_id (точний збіг) — для формату B де ПІБ не зчитується.
+      2) За ПІБ керівника (fuzzy match) — для формату A.
     Повертає (num_podyaka, matched_pib) або (None, None).
     """
+    # Пошук за ID (формат B: pib_kerivnyk порожній)
+    if deal_id is not None:
+        for rec in podyaky_pdf:
+            if rec.get('id') == deal_id:
+                return rec['num_podyaka'], rec.get('pib_kerivnyk', '')
+
     if not pib_kerivnyk:
         return None, None
     pib_str = str(pib_kerivnyk)
 
+    # Пошук за ПІБ (формат A)
     for rec in podyaky_pdf:
-        if fuzzy_match(pib_str, rec['pib_kerivnyk'], threshold):
+        if rec.get('pib_kerivnyk') and fuzzy_match(pib_str, rec['pib_kerivnyk'], threshold):
             return rec['num_podyaka'], rec['pib_kerivnyk']
 
     # Якщо кілька ПІБ через кому
@@ -250,7 +306,7 @@ def find_podyaka(pib_kerivnyk: str, podyaky_pdf: list, threshold: float = 0.75):
         if len(part) < 5:
             continue
         for rec in podyaky_pdf:
-            if fuzzy_match(part, rec['pib_kerivnyk'], threshold):
+            if rec.get('pib_kerivnyk') and fuzzy_match(part, rec['pib_kerivnyk'], threshold):
                 return rec['num_podyaka'], rec['pib_kerivnyk']
 
     return None, None
@@ -343,7 +399,10 @@ def process_diplomy(diplomy_rows: list, diplomy_pdf: list, podyaky_pdf: list,
         # --- Подяка (тільки для 590 грн) ---
         # qty для подяки = 1: навіть якщо учасників 2+, вчитель отримує 1 примірник
         if ptype == 'FULL':
-            num_pod, _ = find_podyaka(pib_k, podyaky_pdf, threshold)
+            # Якщо ПІБ керівника порожнє або прочерк — подяку не генеруємо
+            if not pib_k.strip() or pib_k.strip() in ('-', '—', 'н/а', 'немає'):
+                continue
+            num_pod, _ = find_podyaka(pib_k, podyaky_pdf, threshold, deal_id=deal_id)
             if num_pod is None:
                 podyaka_out.append({'num_doc': '⚠ Не знайдено', 'type': 'Подяка',
                                     'pib': clean_teacher_pib(pib_k), 'qty': 1,
@@ -392,7 +451,11 @@ def process_podyaky(podyaky_rows: list, podyaky_pdf: list,
         if ptype == 'FULL':
             continue   # вже оброблено в кроці 2
 
-        num_pod, _ = find_podyaka(pib_k, podyaky_pdf, threshold)
+        # Якщо ПІБ керівника порожнє або прочерк — подяку не генеруємо
+        if not pib_k.strip() or pib_k.strip() in ('-', '—', 'н/а', 'немає'):
+            continue
+
+        num_pod, _ = find_podyaka(pib_k, podyaky_pdf, threshold, deal_id=deal_id)
         if num_pod is None:
             podyaka_out.append({'num_doc': '⚠ Не знайдено', 'type': 'Подяка',
                                 'pib': clean_teacher_pib(pib_k), 'qty': qty,
