@@ -198,34 +198,61 @@ def read_pdf_diplomy(path: str) -> list:
 
 def read_pdf_podyaky(path: str) -> list:
     """
-    Читає PDF-таблицю номерів подяк.
-    Формат A (3 колонки): ID | ПІБ керівника | №Подяки  — таблиця pdfplumber.
-    Формат B (5 колонок): ID | Школа | ПІБ | Товар | №Подяки — без таблиць;
-      у цьому форматі №Подяки зчитується за позицією символів (x≈288-307).
-    Повертає list[dict]: id, pib_kerivnyk, num_podyaka
+    Читає PDF-таблицю номерів подяк. Підтримує три формати:
+
+    Формат A (3 колонки): Bitrix_ID | ПІБ керівника | №Подяки
+    Формат C (5 колонок): ID | '' | ПІБ керівника | №Подяки | ''
+      — нова таблиця «для швидкого пошуку» без Bitrix-ID або з ним.
+      ID може бути порядковим (1, 2, 3...) або Bitrix24 (30000+).
+    Формат B (позиційний): якщо таблиці не виявлено.
+
+    Повертає list[dict]: id (Bitrix ID або None), pib_kerivnyk, num_podyaka
     """
     from collections import defaultdict
     records = []
     print(f"📖 PDF подяк: {os.path.basename(path)}")
 
-    # --- Спроба A: табличне зчитування ---
+    # --- Спроба A/C: табличне зчитування ---
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
             for table in (page.extract_tables() or []):
                 for row in table:
-                    if not row or len(row) < 3:
+                    if not row:
                         continue
-                    id_str  = str(row[0]).replace('\n', '').strip() if row[0] else ''
-                    num_str = str(row[2]).replace('\n', '').strip() if row[2] else ''
-                    if not id_str.isdigit() or not num_str.isdigit():
+                    cells = [str(c).replace('\n', ' ').strip() if c else '' for c in row]
+
+                    # Формат C (5 кол.): ID | '' | ПІБ | №Подяки | ''
+                    # col[1] порожній, ПІБ у col[2], № у col[3]
+                    if (len(cells) >= 4
+                            and cells[0].isdigit()
+                            and not cells[1]
+                            and cells[2]
+                            and cells[3].isdigit()):
+                        id_val = int(cells[0])
+                        # Bitrix24 ID зазвичай > 1000; порядковий — 1..200
+                        bitrix_id = id_val if id_val > 1000 else None
+                        records.append({
+                            'id':           bitrix_id,
+                            'pib_kerivnyk': cells[2],
+                            'num_podyaka':  int(cells[3]),
+                        })
                         continue
-                    records.append({
-                        'id':           int(id_str),
-                        'pib_kerivnyk': str(row[1]).replace('\n', ' ').strip() if row[1] else '',
-                        'num_podyaka':  int(num_str),
-                    })
+
+                    # Формат A (3 кол.): Bitrix_ID | ПІБ | №Подяки
+                    if (len(cells) >= 3
+                            and cells[0].isdigit()
+                            and cells[1]
+                            and cells[2].isdigit()):
+                        records.append({
+                            'id':           int(cells[0]),
+                            'pib_kerivnyk': cells[1],
+                            'num_podyaka':  int(cells[2]),
+                        })
+
     if records:
-        print(f"   → {len(records)} записів (таблиця)")
+        has_id   = sum(1 for r in records if r['id'] is not None)
+        has_name = sum(1 for r in records if r['pib_kerivnyk'])
+        print(f"   → {len(records)} записів (таблиця): з Bitrix-ID={has_id}, з ПІБ={has_name}")
         return records
 
     # --- Запасний варіант B: позиційне зчитування по символах ---
@@ -255,7 +282,7 @@ def read_pdf_podyaky(path: str) -> list:
                     continue
                 records.append({
                     'id':           int(id_str),
-                    'pib_kerivnyk': '',   # не розрізнюється у форматі B
+                    'pib_kerivnyk': '',
                     'num_podyaka':  int(num_str),
                 })
     print(f"   → {len(records)} записів (позиційне)")
