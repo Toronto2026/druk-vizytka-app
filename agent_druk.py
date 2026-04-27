@@ -46,8 +46,8 @@ except ImportError:
 # КОНФІГУРАЦІЯ ЗА ЗАМОВЧУВАННЯМ
 # ==========================================
 DEFAULT_CONFIG = {
-    'DIPLOMA_FIELD_ID':  'UF_CRM_DIPLOMA_NUMBER',
-    'PODYAKA_FIELD_ID':  'UF_CRM_PODYAKA_NUMBER',
+    'DIPLOMA_FIELD_ID':  'UF_CRM_1777295535994',   # №ДИПЛОМА
+    'PODYAKA_FIELD_ID':  'UF_CRM_1777295487015',   # №ПОДЯКИ
     'SHEET_DIPLOMY':     'Друк дипломів',
     'SHEET_PODYAKY':     'Друк подяк',
     'API_DELAY_MS':      200,
@@ -122,6 +122,14 @@ def _read_ws(ws) -> (list, list):
             continue
         rows.append(dict(zip(headers, row_vals)))
     return headers, rows
+
+
+def read_all_rows(path: str) -> list:
+    """Читає всі рядки з першого аркуша Excel без фільтрації."""
+    wb = openpyxl.load_workbook(path)
+    main_name = wb.sheetnames[0]
+    _, all_rows = _read_ws(wb[main_name])
+    return all_rows
 
 
 def read_excel(path: str, config: dict) -> (list, list):
@@ -665,7 +673,87 @@ def write_output(diploma_out: list, podyaka_out: list, zvedena: list,
 
 
 # ==========================================
-# КРОК 5 – БІТРІКС REST API
+# КРОК 5а – БІТРІКС: ЗАПИСАТИ ДЛЯ ВСІХ УГОД
+# ==========================================
+def update_bitrix_all(all_rows: list, diplomy_pdf: list, podyaky_pdf: list,
+                      config: dict, errors: list):
+    """
+    Записує №Диплома і №Подяки у Bitrix24 для ВСІХ угод з Excel
+    (включно з електронними) — не тільки для друку.
+    Пошук: диплом — за ID угоди; подяка — за ПІБ керівника (fuzzy).
+    """
+    webhook = config.get('BITRIX_WEBHOOK_URL', '').strip()
+    if not webhook:
+        return
+    if not REQUESTS_AVAILABLE:
+        return
+
+    d_field   = config['DIPLOMA_FIELD_ID']
+    p_field   = config['PODYAKA_FIELD_ID']
+    delay     = config['API_DELAY_MS'] / 1000.0
+    threshold = config.get('FUZZY_THRESHOLD', 0.75)
+
+    # Індекс PDF дипломів: id → num_diploma
+    pdf_dip_by_id = {}
+    for rec in diplomy_pdf:
+        pdf_dip_by_id[rec['id']] = rec['num_diploma']
+
+    ok_count  = 0
+    skip_count = 0
+
+    for row in all_rows:
+        raw_id = get_field(row, 'ID')
+        if raw_id is None:
+            continue
+        try:
+            deal_id = int(raw_id)
+        except (ValueError, TypeError):
+            continue
+
+        ptype = classify_product(str(get_field(row, 'Товар') or ''))
+        if ptype == 'OTHER':
+            continue
+
+        fields = {}
+
+        # №Диплома — за ID угоди в PDF
+        if deal_id in pdf_dip_by_id:
+            fields[d_field] = str(pdf_dip_by_id[deal_id])
+
+        # №Подяки — за ПІБ керівника (fuzzy)
+        pib_k = str(get_field(row, 'ПІБ керівника, концертмейстера',
+                                   'ПІБ керівника') or '')
+        if pib_k.strip() and pib_k.strip() not in ('-', '—', 'н/а', 'немає'):
+            num_pod, _ = find_podyaka(pib_k, podyaky_pdf, threshold, deal_id=deal_id)
+            if num_pod is not None:
+                fields[p_field] = str(num_pod)
+
+        if not fields:
+            skip_count += 1
+            continue
+
+        url = webhook.rstrip('/') + '/crm.deal.update.json'
+        try:
+            resp = requests.post(url, json={'id': deal_id, 'fields': fields}, timeout=10)
+            if resp.ok and resp.json().get('result'):
+                print(f"  ✓ {deal_id}: {fields}")
+                ok_count += 1
+            else:
+                msg = resp.text[:200]
+                print(f"  ✗ {deal_id}: {msg}")
+                errors.append(f'API помилка ID {deal_id}: {msg}')
+        except Exception as e:
+            print(f"  ✗ {deal_id}: {e}")
+            errors.append(f'API виняток ID {deal_id}: {e}')
+
+        import time
+        time.sleep(delay)
+
+    print(f"\n  Записано: {ok_count} | Пропущено (не знайдено): {skip_count}")
+
+
+# ==========================================
+# КРОК 5 – БІТРІКС REST API (тільки для друку)
 # ==========================================
 def update_bitrix(diploma_out: list, podyaka_out: list, config: dict, errors: list):
     webhook = config.get('BITRIX_WEBHOOK_URL', '').strip()

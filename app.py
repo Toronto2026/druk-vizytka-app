@@ -140,9 +140,10 @@ if run_btn and all_uploaded:
                 process_diplomy,
                 process_podyaky,
                 read_excel,
+                read_all_rows,
                 read_pdf_diplomy,
                 read_pdf_podyaky,
-                update_bitrix,
+                update_bitrix_all,
                 write_output,
             )
         except ImportError as e:
@@ -199,11 +200,12 @@ if run_btn and all_uploaded:
                 write_output(diploma_out, podyaka_out_all, zvedena,
                              output_path, month, errors)
 
-            # ── Крок 5 (опційно) ─────────────────────────────────────────
+            # ── Крок 5 (опційно) — записати для ВСІХ угод ───────────────
             if do_bitrix and bitrix_url:
-                st.write("🔗 Крок 5: Оновлення Бітрікс...")
+                st.write("🔗 Крок 5: Запис №Диплома і №Подяки у Бітрікс для ВСІХ угод...")
                 with redirect_stdout(log_buf):
-                    update_bitrix(diploma_out, podyaka_out_all, config, errors)
+                    all_rows = read_all_rows(excel_path)
+                    update_bitrix_all(all_rows, diplomy_pdf, podyaky_pdf, config, errors)
 
             status.update(label="✅ Готово!", state="complete", expanded=False)
 
