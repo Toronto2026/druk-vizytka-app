@@ -168,17 +168,41 @@ def read_excel(path: str, config: dict) -> (list, list):
 # ==========================================
 # ЗЧИТУВАННЯ PDF
 # ==========================================
+
+def _extract_diploma_num(raw: str):
+    """
+    Extract diploma number from a cell that may contain leaked Laureate text.
+
+    "11"              → 11    clean cell
+    "e 107"           → 107   partial "degree" leaked from previous column
+    "2nd degree\n11"  → 11    full Laureate text then number on next line
+    "2nd degree"      → None  only Laureate text, no number → skip row
+    "Gran Pri\n188"   → 188
+    "Gran Pri"        → None
+    """
+    raw = str(raw).replace('\n', ' ').strip()
+    if not raw:
+        return None
+    lower = raw.lower()
+    for keyword in ('degree', 'gran pri', 'grand pri'):
+        pos = lower.find(keyword)
+        if pos >= 0:
+            after = raw[pos + len(keyword):]
+            nums = re.findall(r'\d+', after)
+            return int(nums[0]) if nums else None
+    # No Laureate keyword — last number handles partial "e 107" leak
+    nums = re.findall(r'\d+', raw)
+    return int(nums[-1]) if nums else None
+
+
 def read_pdf_diplomy(path: str) -> list:
     """
     Читає PDF-таблицю номерів дипломів.
     Структура колонок: ID | Artist | Номінація | Назва роботи | Laureate | №Диплому
     Повертає list[dict]: id, artist, laureate, num_diploma
-
-    Примітка: якщо ПІБ учасника займає 3+ рядки, текст колонки Laureate
-    ("2nd degree") може розірватись між col[4] і col[5], тому col[5] може
-    мати вигляд "e 107" замість "107". Вирішуємо через re.findall.
     """
     records = []
+    skipped = 0
     print(f"📖 PDF дипломів: {os.path.basename(path)}")
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
@@ -186,21 +210,21 @@ def read_pdf_diplomy(path: str) -> list:
                 for row in table:
                     if not row or len(row) < 6:
                         continue
-                    id_str  = str(row[0]).replace('\n', '').strip() if row[0] else ''
+                    id_str = str(row[0]).replace('\n', ' ').strip() if row[0] else ''
                     if not id_str.isdigit():
                         continue
-                    # Витягуємо число з col[5] через regex (може містити "e 107" тощо)
-                    num_raw = str(row[5]).replace('\n', '').strip() if row[5] else ''
-                    nums = re.findall(r'\d+', num_raw)
-                    if not nums:
+                    num_diploma = _extract_diploma_num(row[5])
+                    if num_diploma is None:
+                        skipped += 1
+                        print(f"   SKIP id={id_str}: col[5]={str(row[5])!r} col[4]={str(row[4])!r}")
                         continue
                     records.append({
                         'id':          int(id_str),
                         'artist':      str(row[1]).replace('\n', ' ').strip() if row[1] else '',
                         'laureate':    str(row[4]).replace('\n', ' ').strip() if row[4] else '',
-                        'num_diploma': int(nums[-1]),
+                        'num_diploma': num_diploma,
                     })
-    print(f"   → {len(records)} записів")
+    print(f"   → {len(records)} записів, пропущено {skipped}")
     return records
 
 
