@@ -109,6 +109,18 @@ def get_field(row: dict, *names, default=None):
     return default
 
 
+def _read_num_from_row(row: dict, *field_names) -> 'int | None':
+    """Зчитує ціле додатнє число з рядка Excel за списком можливих імен колонок."""
+    raw = get_field(row, *field_names)
+    if raw is None:
+        return None
+    try:
+        val = int(float(str(raw).strip()))
+        return val if val > 0 else None
+    except (ValueError, TypeError):
+        return None
+
+
 def _read_ws(ws) -> (list, list):
     """Читає аркуш openpyxl, повертає (headers, list_of_dicts)."""
     headers = None
@@ -445,15 +457,25 @@ def process_diplomy(diplomy_rows: list, diplomy_pdf: list, podyaky_pdf: list,
             continue
 
         # --- Диплом ---
-        pdf_recs = pdf_by_id.get(deal_id, [])
-        if not pdf_recs:
-            diploma_out.append({'num_doc': '⚠ Не знайдено', 'type': 'Диплом',
-                                'pib': pib_u, 'qty': qty, 'id': deal_id, 'warning': True})
-            errors.append(f'ID {deal_id} ({pib_u}): номер диплому не знайдено в PDF')
+        # Пріоритет 1: номер безпосередньо з колонки Excel (вже проставлений)
+        d_field   = config.get('DIPLOMA_FIELD_ID', '')
+        num_excel = _read_num_from_row(row, d_field,
+                                       '№ДИПЛОМА', '№ Диплому', '№диплому',
+                                       'Номер диплому', 'num_diploma', '#диплома')
+        if num_excel is not None:
+            diploma_out.append({'num_doc': num_excel, 'type': 'Диплом',
+                                'pib': pib_u, 'qty': qty, 'id': deal_id, 'warning': False})
         else:
-            for pdf_rec in pdf_recs:
-                diploma_out.append({'num_doc': pdf_rec['num_diploma'], 'type': 'Диплом',
-                                    'pib': pib_u, 'qty': qty, 'id': deal_id, 'warning': False})
+            # Пріоритет 2: пошук у PDF за Bitrix ID
+            pdf_recs = pdf_by_id.get(deal_id, [])
+            if not pdf_recs:
+                diploma_out.append({'num_doc': '⚠ Не знайдено', 'type': 'Диплом',
+                                    'pib': pib_u, 'qty': qty, 'id': deal_id, 'warning': True})
+                errors.append(f'ID {deal_id} ({pib_u}): номер диплому не знайдено ні в Excel, ні в PDF')
+            else:
+                for pdf_rec in pdf_recs:
+                    diploma_out.append({'num_doc': pdf_rec['num_diploma'], 'type': 'Диплом',
+                                        'pib': pib_u, 'qty': qty, 'id': deal_id, 'warning': False})
 
         # --- Подяка (тільки для 590 грн) ---
         # qty для подяки = 1: навіть якщо учасників 2+, вчитель отримує 1 примірник
@@ -461,7 +483,14 @@ def process_diplomy(diplomy_rows: list, diplomy_pdf: list, podyaky_pdf: list,
             # Якщо ПІБ керівника порожнє або прочерк — подяку не генеруємо
             if not pib_k.strip() or pib_k.strip() in ('-', '—', 'н/а', 'немає'):
                 continue
-            num_pod, _ = find_podyaka(pib_k, podyaky_pdf, threshold, deal_id=deal_id)
+            # Пріоритет 1: номер з колонки Excel
+            p_field  = config.get('PODYAKA_FIELD_ID', '')
+            num_pod  = _read_num_from_row(row, p_field,
+                                          '№ПОДЯКИ', '№ Подяки', '№подяки',
+                                          'Номер подяки', 'num_podyaka', '#подяки')
+            # Пріоритет 2: пошук у PDF за ПІБ керівника
+            if num_pod is None:
+                num_pod, _ = find_podyaka(pib_k, podyaky_pdf, threshold, deal_id=deal_id)
             if num_pod is None:
                 podyaka_out.append({'num_doc': '⚠ Не знайдено', 'type': 'Подяка',
                                     'pib': clean_teacher_pib(pib_k), 'qty': 1,
@@ -514,7 +543,14 @@ def process_podyaky(podyaky_rows: list, podyaky_pdf: list,
         if not pib_k.strip() or pib_k.strip() in ('-', '—', 'н/а', 'немає'):
             continue
 
-        num_pod, _ = find_podyaka(pib_k, podyaky_pdf, threshold, deal_id=deal_id)
+        # Пріоритет 1: номер з колонки Excel
+        p_field = config.get('PODYAKA_FIELD_ID', '')
+        num_pod = _read_num_from_row(row, p_field,
+                                     '№ПОДЯКИ', '№ Подяки', '№подяки',
+                                     'Номер подяки', 'num_podyaka', '#подяки')
+        # Пріоритет 2: пошук у PDF за ПІБ керівника
+        if num_pod is None:
+            num_pod, _ = find_podyaka(pib_k, podyaky_pdf, threshold, deal_id=deal_id)
         if num_pod is None:
             podyaka_out.append({'num_doc': '⚠ Не знайдено', 'type': 'Подяка',
                                 'pib': clean_teacher_pib(pib_k), 'qty': qty,
