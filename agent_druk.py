@@ -464,6 +464,7 @@ def process_diplomy(diplomy_rows: list, diplomy_pdf: list, podyaky_pdf: list,
                                        '№', '№ДИПЛОМА', '№диплому',
                                        'Номер диплому', 'num_diploma', '#диплома')
         if num_excel is not None:
+            print(f"   EXCEL id={deal_id}: №Диплому={num_excel} ({pib_u})")
             diploma_out.append({'num_doc': num_excel, 'type': 'Диплом',
                                 'pib': pib_u, 'qty': qty, 'id': deal_id, 'warning': False})
         else:

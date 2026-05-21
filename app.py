@@ -55,7 +55,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown(
-        "<small>ТЗ v8.0 · [agent_druk.py](https://github.com)</small>",
+        "<small>ТЗ v8.1 · Excel-пріоритет · [agent_druk.py](https://github.com)</small>",
         unsafe_allow_html=True,
     )
 
