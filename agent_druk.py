@@ -460,6 +460,7 @@ def process_diplomy(diplomy_rows: list, diplomy_pdf: list, podyaky_pdf: list,
         # Пріоритет 1: номер безпосередньо з колонки Excel (вже проставлений)
         d_field   = config.get('DIPLOMA_FIELD_ID', '')
         num_excel = _read_num_from_row(row, d_field,
+                                       '№',
                                        '№ДИПЛОМА', '№ Диплому', '№диплому',
                                        'Номер диплому', 'num_diploma', '#диплома')
         if num_excel is not None:
