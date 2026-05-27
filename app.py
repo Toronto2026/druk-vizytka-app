@@ -214,33 +214,41 @@ if run_btn and all_uploaded:
                 reverse=True,
             )
 
+            # ── Крок 3б (опційно) — редакція подяк ──────────────────────
+            # Читаємо ДО write_output, щоб збагатити podyaka_out_all полем num_extra.
+            # № подяки у редакції (1–61) і в PDF (91, 43, 200…) — різні системи.
+            # В Бітрікс іде лише num_doc (з PDF). num_extra — тільки для поліграфії.
+            redaktsiia_data = []
+            if redaktsiia_file:
+                st.write("📝 Крок 3б: Читання редакції подяк...")
+                with redirect_stdout(log_buf):
+                    redaktsiia_data = read_redaktsiia_podyaky(redaktsiia_path)
+                print_recs = [r for r in podyaka_out_all if not r.get("warning")]
+                # Збагачуємо кожен запис подяки додатковим № з редакції (fuzzy ПІБ)
+                for pod in print_recs:
+                    matched_red = None
+                    for red in redaktsiia_data:
+                        if fuzzy_match(pod["pib"], red["pib_kerivnyk"], 0.75):
+                            matched_red = red
+                            break
+                    pod["num_extra"] = matched_red["num_podyaka"] if matched_red else None
+                # Маркуємо редакцію для вкладки «Редакція»
+                for red in redaktsiia_data:
+                    matched_pod = None
+                    for pr in print_recs:
+                        if fuzzy_match(red["pib_kerivnyk"], pr["pib"], 0.75):
+                            matched_pod = pr
+                            break
+                    red["in_druk"]  = matched_pod is not None
+                    red["druk_num"] = matched_pod["num_doc"]          if matched_pod else None
+                    red["druk_pib"] = matched_pod["pib"]              if matched_pod else None
+
             # ── Крок 4 ───────────────────────────────────────────────────
             st.write("📋 Крок 4: Формування зведеної таблиці...")
             with redirect_stdout(log_buf):
                 zvedena = build_zvedena(diploma_out, podyaka_out_all, diplomy_rows)
                 write_output(diploma_out, podyaka_out_all, zvedena,
                              output_path, month, errors)
-
-            # ── Крок 4б (опційно) — редакція подяк ──────────────────────
-            redaktsiia_data = []
-            if redaktsiia_file:
-                st.write("📝 Крок 4б: Перевірка редакції подяк...")
-                with redirect_stdout(log_buf):
-                    redaktsiia_data = read_redaktsiia_podyaky(redaktsiia_path)
-                # Звіряємо за ПІБ керівника (fuzzy match, поріг 0.75)
-                # № подяки у редакції (1–61) та у списку друку (91, 43, 200…)
-                # — різні системи нумерації, тому порівнюємо тільки за ПІБ
-                print_recs = [r for r in podyaka_out_all if not r.get("warning")]
-                for rec in redaktsiia_data:
-                    matched = None
-                    pib_red = rec["pib_kerivnyk"]
-                    for pr in print_recs:
-                        if fuzzy_match(pib_red, pr["pib"], 0.75):
-                            matched = pr
-                            break
-                    rec["in_druk"]   = matched is not None
-                    rec["druk_num"]  = matched["num_doc"] if matched else None
-                    rec["druk_pib"]  = matched["pib"]    if matched else None
 
             # ── Крок 5 (опційно) — записати для ВСІХ угод ───────────────
             if do_bitrix and bitrix_url:
@@ -331,6 +339,7 @@ if "result" in st.session_state:
             rows.append({
                 "№": i,
                 "№ Документу": r["num_doc"],
+                "№ Подяки (нові)": r.get("num_extra") or "" if r["type"] == "Подяка" else "",
                 "Тип": r["type"],
                 "ПІБ": r["pib"],
                 "К-сть": r["qty"],
@@ -365,12 +374,13 @@ if "result" in st.session_state:
                      })
 
     with tab_p:
-        st.caption("Таблиця подяк для типографії")
+        st.caption("Таблиця подяк для типографії · Основні = з PDF швидкого пошуку · Нові = з редакції")
         rows = []
         for i, r in enumerate(podyaka_out, 1):
             rows.append({
                 "№": i,
-                "№ Подяки": r["num_doc"],
+                "№ Подяки (основні)": r["num_doc"],
+                "№ Подяки (нові)": r.get("num_extra") or "",
                 "ПІБ керівника": r["pib"],
                 "К-сть": r["qty"],
                 "ID угоди": r["id"],
@@ -378,6 +388,8 @@ if "result" in st.session_state:
             })
         st.dataframe(rows, use_container_width=True, hide_index=True,
                      column_config={
+                         "№ Подяки (основні)": st.column_config.NumberColumn(width="medium"),
+                         "№ Подяки (нові)":    st.column_config.NumberColumn(width="medium"),
                          "К-сть": st.column_config.NumberColumn(width="small"),
                          "ID угоди": st.column_config.NumberColumn(width="medium"),
                          "": st.column_config.TextColumn(width="small"),

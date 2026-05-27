@@ -726,45 +726,47 @@ def write_output(diploma_out: list, podyaka_out: list, zvedena: list,
     # ── Аркуш 2: Друк подяк ───────────────────────────────────
     ws_p = wb.create_sheet('Друк подяк')
     ws_p.append([f'ТАБЛИЦЯ ДРУКУ ПОДЯК — Типографія Визитка | {month}',
-                 None, None, None, None])
-    ws_p.merge_cells('A1:E1')
+                 None, None, None, None, None])
+    ws_p.merge_cells('A1:F1')
     ws_p['A1'].font = Font(bold=True, size=12)
     ws_p['A1'].alignment = Alignment(horizontal='center')
-    ws_p.append(['№', '№ Подяки', 'ПІБ керівника', 'Кількість', 'ID угоди'])
+    ws_p.append(['№', '№ Подяки (основні)', '№ Подяки (нові)', 'ПІБ керівника', 'Кількість', 'ID угоди'])
     _hdr(ws_p, 2)
 
     warn_p = []
     for i, rec in enumerate(podyaka_out, 1):
-        ws_p.append([i, rec['num_doc'], rec['pib'], rec['qty'], str(rec['id'])])
+        ws_p.append([i, rec['num_doc'], rec.get('num_extra') or '',
+                     rec['pib'], rec['qty'], str(rec['id'])])
         if rec.get('warning'):
             warn_p.append(i + 2)
 
     last_p = len(podyaka_out) + 2
-    ws_p.append(['Всього подяк до друку:', None, None,
-                 f'=SUM(D3:D{last_p})', None])
+    ws_p.append(['Всього подяк до друку:', None, None, None,
+                 f'=SUM(E3:E{last_p})', None])
 
     for r in warn_p:
         for cell in ws_p[r]:
             cell.fill = _warn_fill()
 
-    for col, w in zip('ABCDE', [5, 12, 45, 12, 10]):
+    for col, w in zip('ABCDEF', [5, 20, 16, 45, 12, 10]):
         ws_p.column_dimensions[col].width = w
 
     # ── Аркуш 3: Зведена для типографії ──────────────────────
     ws_z = wb.create_sheet('Зведена для типографії')
     ws_z.append([f'ЗВЕДЕНА ТАБЛИЦЯ ДРУКУ — Типографія Визитка | {month}',
-                 None, None, None, None, None])
-    ws_z.merge_cells('A1:F1')
+                 None, None, None, None, None, None])
+    ws_z.merge_cells('A1:G1')
     ws_z['A1'].font = Font(bold=True, size=12)
     ws_z['A1'].alignment = Alignment(horizontal='center')
-    ws_z.append(['№', '№ Документу', 'Тип', 'ПІБ', 'К-сть', 'ID угоди'])
+    ws_z.append(['№', '№ Документу', '№ Подяки (нові)', 'Тип', 'ПІБ', 'К-сть', 'ID угоди'])
     _hdr(ws_z, 2)
 
     fill_d = PatternFill(start_color=COLOR_DIPLOMA, end_color=COLOR_DIPLOMA, fill_type='solid')
     fill_p = PatternFill(start_color=COLOR_PODYAKA, end_color=COLOR_PODYAKA, fill_type='solid')
 
     for i, rec in enumerate(zvedena, 1):
-        ws_z.append([i, rec['num_doc'], rec['type'], rec['pib'],
+        num_extra = rec.get('num_extra') or '' if rec['type'] == 'Подяка' else ''
+        ws_z.append([i, rec['num_doc'], num_extra, rec['type'], rec['pib'],
                      rec['qty'], str(rec['id'])])
         fill = _warn_fill() if rec.get('warning') else \
                (fill_d if rec['type'] == 'Диплом' else fill_p)
@@ -772,10 +774,10 @@ def write_output(diploma_out: list, podyaka_out: list, zvedena: list,
             cell.fill = fill
 
     last_z = len(zvedena) + 2
-    ws_z.append(['ВСЬОГО до друку (без помилок):', None, None, None,
-                 f'=SUMIF(B3:B{last_z},"<>*Не знайдено*",E3:E{last_z})', None])
+    ws_z.append(['ВСЬОГО до друку (без помилок):', None, None, None, None,
+                 f'=SUMIF(B3:B{last_z},"<>*Не знайдено*",F3:F{last_z})', None])
 
-    for col, w in zip('ABCDEF', [5, 15, 10, 45, 8, 10]):
+    for col, w in zip('ABCDEFG', [5, 20, 16, 10, 45, 8, 10]):
         ws_z.column_dimensions[col].width = w
 
     wb.save(output_path)
