@@ -210,7 +210,9 @@ def _extract_diploma_num(raw: str):
 def read_pdf_diplomy(path: str) -> list:
     """
     Читає PDF-таблицю номерів дипломів.
-    Структура колонок: ID | Artist | Номінація | Назва роботи | Laureate | №Диплому
+    Підтримує два формати:
+      6 колонок: ID | Artist | Номінація | Назва роботи | Laureate | №Диплому
+      5 колонок: ID | Artist | Title | Laureate | №Диплому
     Повертає list[dict]: id, artist, laureate, num_diploma
     """
     records = []
@@ -220,20 +222,26 @@ def read_pdf_diplomy(path: str) -> list:
         for page in pdf.pages:
             for table in (page.extract_tables() or []):
                 for row in table:
-                    if not row or len(row) < 6:
+                    if not row or len(row) < 5:
                         continue
                     id_str = str(row[0]).replace('\n', ' ').strip() if row[0] else ''
                     if not id_str.isdigit():
                         continue
-                    num_diploma = _extract_diploma_num(row[5])
+                    # 6-column format: Laureate=col[4], №Диплому=col[5]
+                    # 5-column format: Laureate=col[3], №Диплому=col[4]
+                    if len(row) >= 6:
+                        laureate_col, diploma_col = 4, 5
+                    else:
+                        laureate_col, diploma_col = 3, 4
+                    num_diploma = _extract_diploma_num(row[diploma_col])
                     if num_diploma is None:
                         skipped += 1
-                        print(f"   SKIP id={id_str}: col[5]={str(row[5])!r} col[4]={str(row[4])!r}")
+                        print(f"   SKIP id={id_str}: col[{diploma_col}]={str(row[diploma_col])!r} col[{laureate_col}]={str(row[laureate_col])!r}")
                         continue
                     records.append({
                         'id':          int(id_str),
                         'artist':      str(row[1]).replace('\n', ' ').strip() if row[1] else '',
-                        'laureate':    str(row[4]).replace('\n', ' ').strip() if row[4] else '',
+                        'laureate':    str(row[laureate_col]).replace('\n', ' ').strip() if row[laureate_col] else '',
                         'num_diploma': num_diploma,
                     })
     print(f"   → {len(records)} записів, пропущено {skipped}")
