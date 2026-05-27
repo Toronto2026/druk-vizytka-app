@@ -97,13 +97,15 @@ def get_field(row: dict, *names, default=None):
         if name in row and row[name] is not None and str(row[name]).strip() != '':
             return row[name]
     # нечіткий пошук по ключах
+    # Не матчимо, якщо ключ більш ніж на 8 символів довший за шукане ім'я
+    # (захист від 'Кількість учасників (цифрою)' при пошуку 'Кількість')
     names_lower = [n.lower() for n in names]
     for key in row:
         if key is None:
             continue
         k = str(key).lower()
         for n in names_lower:
-            if n in k or k in n:
+            if (n in k or k in n) and len(k) <= len(n) + 8:
                 if row[key] is not None and str(row[key]).strip() != '':
                     return row[key]
     return default
@@ -497,7 +499,7 @@ def process_diplomy(diplomy_rows: list, diplomy_pdf: list, podyaky_pdf: list,
         pib_k    = str(get_field(row, 'ПІБ керівника, концертмейстера',
                                       'ПІБ керівника') or '')
         product  = str(get_field(row, 'Товар') or '')
-        qty_raw  = get_field(row, 'Кількість')
+        qty_raw  = get_field(row, 'Кількість', 'Количество')
         qty      = int(qty_raw) if qty_raw is not None else 1
         ptype    = classify_product(product)
 
@@ -580,7 +582,7 @@ def process_podyaky(podyaky_rows: list, podyaky_pdf: list,
         pib_k   = str(get_field(row, 'ПІБ керівника, концертмейстера',
                                       'ПІБ керівника') or '')
         product = str(get_field(row, 'Товар') or '')
-        qty_raw = get_field(row, 'Кількість')
+        qty_raw = get_field(row, 'Кількість', 'Количество')
         qty     = int(qty_raw) if qty_raw is not None else 1
         ptype   = classify_product(product)
 
