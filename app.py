@@ -102,6 +102,21 @@ with col3:
 
 all_uploaded = excel_file and pdf_diplomy and pdf_podyaky
 
+with st.expander("📝 Редакція подяк *(опційно)*", expanded=False):
+    st.caption(
+        "Завантажте Excel-редакцію подяк (колонки: ПІБ керівника | School of arts | Учасники | № подяки). "
+        "Агент перевірить, які з них є у списку друку."
+    )
+    redaktsiia_file = st.file_uploader(
+        "Excel редакції подяк",
+        type=["xlsx"],
+        label_visibility="collapsed",
+        key="redaktsiia_uploader",
+        help="Наприклад: zavdannia-dizaineru-v3-with-ids.xlsx",
+    )
+    if redaktsiia_file:
+        st.success(f"✔ {redaktsiia_file.name} ({redaktsiia_file.size // 1024} KB)")
+
 st.markdown("---")
 st.markdown("### 2 · Запустити")
 
@@ -120,10 +135,11 @@ if run_btn and all_uploaded:
 
     # Зберігаємо завантажені файли у тимчасову папку
     with tempfile.TemporaryDirectory() as tmpdir:
-        excel_path  = os.path.join(tmpdir, "input.xlsx")
-        pdfd_path   = os.path.join(tmpdir, "diplomy.pdf")
-        podyp_path  = os.path.join(tmpdir, "podyaky.pdf")
-        output_path = os.path.join(tmpdir, "output.xlsx")
+        excel_path       = os.path.join(tmpdir, "input.xlsx")
+        pdfd_path        = os.path.join(tmpdir, "diplomy.pdf")
+        podyp_path       = os.path.join(tmpdir, "podyaky.pdf")
+        redaktsiia_path  = os.path.join(tmpdir, "redaktsiia.xlsx")
+        output_path      = os.path.join(tmpdir, "output.xlsx")
 
         with open(excel_path, "wb") as f:
             f.write(excel_file.getbuffer())
@@ -131,6 +147,9 @@ if run_btn and all_uploaded:
             f.write(pdf_diplomy.getbuffer())
         with open(podyp_path, "wb") as f:
             f.write(pdf_podyaky.getbuffer())
+        if redaktsiia_file:
+            with open(redaktsiia_path, "wb") as f:
+                f.write(redaktsiia_file.getbuffer())
 
         # Імпортуємо агент (після запису файлів, щоб уникнути проблем)
         try:
@@ -143,6 +162,7 @@ if run_btn and all_uploaded:
                 read_all_rows,
                 read_pdf_diplomy,
                 read_pdf_podyaky,
+                read_redaktsiia_podyaky,
                 update_bitrix_all,
                 write_output,
             )
@@ -200,6 +220,20 @@ if run_btn and all_uploaded:
                 write_output(diploma_out, podyaka_out_all, zvedena,
                              output_path, month, errors)
 
+            # ── Крок 4б (опційно) — редакція подяк ──────────────────────
+            redaktsiia_data = []
+            if redaktsiia_file:
+                st.write("📝 Крок 4б: Перевірка редакції подяк...")
+                with redirect_stdout(log_buf):
+                    redaktsiia_data = read_redaktsiia_podyaky(redaktsiia_path)
+                # Звіряємо за № подяки з друку
+                print_nums = {
+                    r["num_doc"] for r in podyaka_out_all
+                    if not r.get("warning") and isinstance(r["num_doc"], int)
+                }
+                for rec in redaktsiia_data:
+                    rec["in_druk"] = bool(rec["num_podyaka"] and rec["num_podyaka"] in print_nums)
+
             # ── Крок 5 (опційно) — записати для ВСІХ угод ───────────────
             if do_bitrix and bitrix_url:
                 st.write("🔗 Крок 5: Запис №Диплома і №Подяки у Бітрікс для ВСІХ угод...")
@@ -223,6 +257,7 @@ if run_btn and all_uploaded:
             "month":         month,
             "n_diplomy_pdf": len(diplomy_pdf),
             "n_podyaky_pdf": len(podyaky_pdf),
+            "redaktsiia":    redaktsiia_data,
         }
 
 # ── Показуємо результат ─────────────────────────────────────────────────────────
@@ -262,10 +297,15 @@ if "result" in st.session_state:
     )
 
     # ── Вкладки з таблицями ────────────────────────────────────────────────
-    tab_z, tab_d, tab_p, tab_err, tab_log = st.tabs([
+    redaktsiia   = res.get("redaktsiia", [])
+    n_in_druk    = sum(1 for r in redaktsiia if r.get("in_druk"))
+    redaktsiia_tab_label = f"📝 Редакція ({n_in_druk}/{len(redaktsiia)} у друку)" if redaktsiia else "📝 Редакція"
+
+    tab_z, tab_d, tab_p, tab_r, tab_err, tab_log = st.tabs([
         "📋 Зведена",
         f"🎓 Диплом ({len(diploma_out)})",
         f"🙏 Подяки ({len(podyaka_out)})",
+        redaktsiia_tab_label,
         f"⚠️ Помилки ({len(errors)})",
         "🔍 Лог",
     ])
@@ -334,6 +374,60 @@ if "result" in st.session_state:
                          "ID угоди": st.column_config.NumberColumn(width="medium"),
                          "": st.column_config.TextColumn(width="small"),
                      })
+
+    with tab_r:
+        if not redaktsiia:
+            st.info("Завантажте файл редакції подяк у розділі «Редакція подяк (опційно)» і повторно запустіть агент.")
+        else:
+            in_druk_list  = [r for r in redaktsiia if r.get("in_druk")]
+            not_druk_list = [r for r in redaktsiia if not r.get("in_druk")]
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Всього у редакції", len(redaktsiia))
+            c2.metric("✅ Є у списку друку", len(in_druk_list))
+            c3.metric("— Не замовлено друк", len(not_druk_list))
+
+            rows = []
+            for r in redaktsiia:
+                rows.append({
+                    "№ подяки":      r["num_podyaka"],
+                    "ПІБ керівника": r["pib_kerivnyk"],
+                    "School of arts": r["school"],
+                    "Учасники":      r["uchastnyky"],
+                    "Друк":          "✅" if r.get("in_druk") else "—",
+                })
+            st.dataframe(rows, use_container_width=True, hide_index=True,
+                         column_config={
+                             "№ подяки":      st.column_config.NumberColumn(width="small"),
+                             "Друк":          st.column_config.TextColumn(width="small"),
+                             "ПІБ керівника": st.column_config.TextColumn(width="large"),
+                         })
+
+            # Кнопка скачати тільки ті, що є у друку
+            if in_druk_list:
+                import io as _io
+                import openpyxl as _opxl
+                from openpyxl.styles import PatternFill as _PF, Font as _Font
+                wb_out = _opxl.Workbook()
+                ws_out = wb_out.active
+                ws_out.title = "Редакція для друку"
+                hdr = ["№ подяки", "ПІБ керівника", "School of arts", "Учасники"]
+                ws_out.append(hdr)
+                for cell in ws_out[1]:
+                    cell.font = _Font(bold=True)
+                    cell.fill = _PF("solid", fgColor="4472C4")
+                    cell.font = _Font(bold=True, color="FFFFFF")
+                for r in in_druk_list:
+                    ws_out.append([r["num_podyaka"], r["pib_kerivnyk"], r["school"], r["uchastnyky"]])
+                for col, w in zip("ABCD", [10, 40, 45, 50]):
+                    ws_out.column_dimensions[col].width = w
+                buf = _io.BytesIO()
+                wb_out.save(buf)
+                st.download_button(
+                    label=f"⬇ Завантажити редакцію для друку ({len(in_druk_list)} подяк)",
+                    data=buf.getvalue(),
+                    file_name=f"редакція_для_друку_{res['month'].replace(' ', '_')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
 
     with tab_err:
         if errors:

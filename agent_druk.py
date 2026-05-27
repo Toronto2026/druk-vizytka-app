@@ -342,6 +342,46 @@ def read_pdf_podyaky(path: str) -> list:
 
 
 # ==========================================
+# ЗЧИТУВАННЯ РЕДАКЦІЇ ПОДЯК (без Bitrix ID)
+# ==========================================
+def read_redaktsiia_podyaky(path: str) -> list:
+    """
+    Читає Excel-файл редакції подяк (без Bitrix ID).
+    Очікувана структура: ПІБ керівника | School of arts | Учасники | № подяки
+    Повертає list[dict]: pib_kerivnyk, school, uchastnyky, num_podyaka
+    """
+    wb = openpyxl.load_workbook(path)
+    ws = wb.active
+    records = []
+    headers = None
+    for row_vals in ws.iter_rows(values_only=True):
+        if not any(v is not None for v in row_vals):
+            continue
+        if headers is None:
+            headers = [str(v).strip() if v is not None else f'_col{i}'
+                       for i, v in enumerate(row_vals)]
+            continue
+        row = dict(zip(headers, row_vals))
+        pib = str(row.get('ПІБ керівника', '') or '').strip()
+        school = str(row.get('School of arts', '') or '').strip()
+        uchastnyky = str(row.get('Учасники', '') or '').strip()
+        num_raw = row.get('№ подяки', None)
+        try:
+            num = int(float(str(num_raw).strip())) if num_raw is not None else None
+        except (ValueError, TypeError):
+            num = None
+        if pib or num is not None:
+            records.append({
+                'pib_kerivnyk': pib,
+                'school':       school,
+                'uchastnyky':   uchastnyky,
+                'num_podyaka':  num,
+            })
+    print(f"📖 Редакція подяк: {len(records)} записів")
+    return records
+
+
+# ==========================================
 # НЕЧІТКИЙ ПОШУК ПІБ
 # ==========================================
 def _norm(s: str) -> str:
