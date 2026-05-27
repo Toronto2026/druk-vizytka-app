@@ -105,7 +105,7 @@ all_uploaded = excel_file and pdf_diplomy and pdf_podyaky
 with st.expander("📝 Редакція подяк *(опційно)*", expanded=False):
     st.caption(
         "Завантажте Excel-редакцію подяк (колонки: ПІБ керівника | School of arts | Учасники | № подяки). "
-        "Агент перевірить, які з них є у списку друку."
+        "Агент перевірить, які з них є у списку друку — порівняння за ПІБ керівника (fuzzy match)."
     )
     redaktsiia_file = st.file_uploader(
         "Excel редакції подяк",
@@ -156,6 +156,7 @@ if run_btn and all_uploaded:
             from agent_druk import (
                 DEFAULT_CONFIG,
                 build_zvedena,
+                fuzzy_match,
                 process_diplomy,
                 process_podyaky,
                 read_excel,
@@ -226,13 +227,20 @@ if run_btn and all_uploaded:
                 st.write("📝 Крок 4б: Перевірка редакції подяк...")
                 with redirect_stdout(log_buf):
                     redaktsiia_data = read_redaktsiia_podyaky(redaktsiia_path)
-                # Звіряємо за № подяки з друку
-                print_nums = {
-                    r["num_doc"] for r in podyaka_out_all
-                    if not r.get("warning") and isinstance(r["num_doc"], int)
-                }
+                # Звіряємо за ПІБ керівника (fuzzy match, поріг 0.75)
+                # № подяки у редакції (1–61) та у списку друку (91, 43, 200…)
+                # — різні системи нумерації, тому порівнюємо тільки за ПІБ
+                print_recs = [r for r in podyaka_out_all if not r.get("warning")]
                 for rec in redaktsiia_data:
-                    rec["in_druk"] = bool(rec["num_podyaka"] and rec["num_podyaka"] in print_nums)
+                    matched = None
+                    pib_red = rec["pib_kerivnyk"]
+                    for pr in print_recs:
+                        if fuzzy_match(pib_red, pr["pib"], 0.75):
+                            matched = pr
+                            break
+                    rec["in_druk"]   = matched is not None
+                    rec["druk_num"]  = matched["num_doc"] if matched else None
+                    rec["druk_pib"]  = matched["pib"]    if matched else None
 
             # ── Крок 5 (опційно) — записати для ВСІХ угод ───────────────
             if do_bitrix and bitrix_url:
@@ -389,17 +397,21 @@ if "result" in st.session_state:
             rows = []
             for r in redaktsiia:
                 rows.append({
-                    "№ подяки":      r["num_podyaka"],
-                    "ПІБ керівника": r["pib_kerivnyk"],
-                    "School of arts": r["school"],
-                    "Учасники":      r["uchastnyky"],
-                    "Друк":          "✅" if r.get("in_druk") else "—",
+                    "№ ред.":          r["num_podyaka"],
+                    "ПІБ керівника":   r["pib_kerivnyk"],
+                    "School of arts":  r["school"],
+                    "Учасники":        r["uchastnyky"],
+                    "Друк":            "✅" if r.get("in_druk") else "—",
+                    "№ подяки (друк)": r.get("druk_num") or "",
+                    "Знайдений ПІБ":   r.get("druk_pib") or "",
                 })
             st.dataframe(rows, use_container_width=True, hide_index=True,
                          column_config={
-                             "№ подяки":      st.column_config.NumberColumn(width="small"),
-                             "Друк":          st.column_config.TextColumn(width="small"),
-                             "ПІБ керівника": st.column_config.TextColumn(width="large"),
+                             "№ ред.":          st.column_config.NumberColumn(width="small"),
+                             "Друк":            st.column_config.TextColumn(width="small"),
+                             "№ подяки (друк)": st.column_config.NumberColumn(width="medium"),
+                             "ПІБ керівника":   st.column_config.TextColumn(width="large"),
+                             "Знайдений ПІБ":   st.column_config.TextColumn(width="large"),
                          })
 
             # Кнопка скачати тільки ті, що є у друку
@@ -410,15 +422,17 @@ if "result" in st.session_state:
                 wb_out = _opxl.Workbook()
                 ws_out = wb_out.active
                 ws_out.title = "Редакція для друку"
-                hdr = ["№ подяки", "ПІБ керівника", "School of arts", "Учасники"]
+                hdr = ["№ ред.", "ПІБ керівника", "School of arts", "Учасники",
+                       "№ подяки (друк)", "Знайдений ПІБ"]
                 ws_out.append(hdr)
                 for cell in ws_out[1]:
                     cell.font = _Font(bold=True)
                     cell.fill = _PF("solid", fgColor="4472C4")
                     cell.font = _Font(bold=True, color="FFFFFF")
                 for r in in_druk_list:
-                    ws_out.append([r["num_podyaka"], r["pib_kerivnyk"], r["school"], r["uchastnyky"]])
-                for col, w in zip("ABCD", [10, 40, 45, 50]):
+                    ws_out.append([r["num_podyaka"], r["pib_kerivnyk"], r["school"], r["uchastnyky"],
+                                   r.get("druk_num"), r.get("druk_pib")])
+                for col, w in zip("ABCDEF", [10, 40, 45, 50, 18, 40]):
                     ws_out.column_dimensions[col].width = w
                 buf = _io.BytesIO()
                 wb_out.save(buf)
