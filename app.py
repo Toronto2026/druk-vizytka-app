@@ -156,6 +156,7 @@ if run_btn and all_uploaded:
             from agent_druk import (
                 DEFAULT_CONFIG,
                 build_zvedena,
+                check_org_fee,
                 fuzzy_match,
                 process_diplomy,
                 process_podyaky,
@@ -193,6 +194,25 @@ if run_btn and all_uploaded:
                 st.error(str(e))
                 st.code(traceback.format_exc())
                 st.stop()
+
+            # ── Перевірка організаційного внеску ────────────────────────
+            all_rows_check = read_all_rows(excel_path)
+            missing_fee = check_org_fee(all_rows_check, diplomy_rows)
+            if missing_fee:
+                ids_str = ", ".join(str(r["id"]) for r in missing_fee)
+                details = "\n".join(
+                    f"• ID {r['id']} — {r['pib']}" for r in missing_fee
+                )
+                status.update(
+                    label=f"⚠️ {len(missing_fee)} угод без 'Організаційний внесок'",
+                    state="running",
+                )
+                st.warning(
+                    f"**⚠️ Відсутній обов'язковий товар «Організаційний внесок»** "
+                    f"у {len(missing_fee)} угодах:\n\n{details}\n\n"
+                    f"Ці учасники **не потраплять** в таблицю онлайн-дипломів. "
+                    f"Перевірте угоди в Bitrix24 перед публікацією."
+                )
 
             # ── Крок 2 ───────────────────────────────────────────────────
             st.write(f"⚙️ Крок 2: Обробка дипломів ({len(diplomy_rows)} рядків)...")

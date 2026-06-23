@@ -467,6 +467,52 @@ def clean_teacher_pib(pib: str) -> str:
 
 
 # ==========================================
+# ПЕРЕВІРКА ОРГАНІЗАЦІЙНОГО ВНЕСКУ
+# ==========================================
+def check_org_fee(all_rows: list, diplomy_rows: list) -> list:
+    """
+    Перевіряє чи є 'організаційний внесок' серед товарів кожної угоди.
+    Виключення: угоди з типом FULL (590 грн повний комплект нагород).
+    Повертає список {'id', 'pib'} для угод без обов'язкового товару.
+    """
+    # Збираємо ID угод, у яких є хоча б один рядок "організаційний внесок"
+    org_fee_ids: set[int] = set()
+    for row in all_rows:
+        tovary = str(get_field(row, 'Товар') or '').lower()
+        if 'організаційний внесок' in tovary:
+            raw_id = get_field(row, 'ID')
+            try:
+                org_fee_ids.add(int(raw_id))
+            except (ValueError, TypeError):
+                pass
+
+    # Для кожної унікальної угоди в дипломах — перевіряємо наявність внеску
+    seen: set[int] = set()
+    missing = []
+    for row in diplomy_rows:
+        raw_id = get_field(row, 'ID')
+        try:
+            deal_id = int(raw_id)
+        except (ValueError, TypeError):
+            continue
+        if deal_id in seen:
+            continue
+        seen.add(deal_id)
+
+        ptype = classify_product(str(get_field(row, 'Товар') or ''))
+        if ptype == 'FULL':
+            continue  # повний комплект — перевірка не потрібна
+
+        if deal_id not in org_fee_ids:
+            pib = clean_participant_pib(
+                str(get_field(row, 'ПІБ Учасника', 'ПІБ учасника', 'Artist') or '')
+            )
+            missing.append({'id': deal_id, 'pib': pib})
+
+    return missing
+
+
+# ==========================================
 # КРОК 2 – ОБРОБКА АРКУША «ДРУК ДИПЛОМІВ»
 # ==========================================
 def process_diplomy(diplomy_rows: list, diplomy_pdf: list, podyaky_pdf: list,
