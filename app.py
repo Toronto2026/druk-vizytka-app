@@ -53,6 +53,117 @@ with st.sidebar:
     do_bitrix = st.toggle("Записати номери у Бітрікс після обробки",
                           value=False, disabled=not bitrix_url)
 
+    # ── Перевірка товарів у Bitrix24 ─────────────────────────────────────────
+    st.markdown("---")
+    with st.expander("🔍 Перевірка угод Bitrix24", expanded=False):
+        st.caption(
+            "Знаходить угоди без обов'язкового товару «Організаційний внесок» "
+            "та надає прямі посилання для виправлення."
+        )
+        check_webhook = st.text_input(
+            "Webhook для перевірки",
+            type="password",
+            placeholder="https://your.bitrix24.ua/rest/1/xxx/",
+            key="check_webhook",
+        )
+        check_stage = st.text_input(
+            "Стадія угод (наприклад: C2:WON)",
+            placeholder="C2:WON",
+            key="check_stage",
+            help="Лишіть порожнім щоб перевірити всі угоди воронки",
+        )
+        check_pipeline = st.text_input(
+            "ID воронки (CATEGORY_ID)",
+            value="2",
+            key="check_pipeline",
+        )
+
+        if st.button("🔍 Перевірити", disabled=not check_webhook, key="btn_check"):
+            import requests as _req
+
+            hook = check_webhook.rstrip("/")
+            missing_bx = []
+            start = 0
+
+            with st.spinner("Завантажую угоди з Bitrix24..."):
+                while True:
+                    params = {
+                        "filter[CATEGORY_ID]": check_pipeline,
+                        "select[]": ["ID", "TITLE"],
+                        "start": start,
+                    }
+                    if check_stage:
+                        params["filter[STAGE_ID]"] = check_stage
+                    try:
+                        resp = _req.get(f"{hook}/crm.deal.list", params=params, timeout=15)
+                        data = resp.json()
+                    except Exception as e:
+                        st.error(f"Помилка запиту: {e}")
+                        break
+
+                    deals = data.get("result", [])
+                    if not deals:
+                        break
+
+                    for deal in deals:
+                        deal_id = int(deal["ID"])
+                        try:
+                            pr = _req.get(
+                                f"{hook}/crm.deal.productrows.get",
+                                params={"id": deal_id},
+                                timeout=10,
+                            ).json()
+                            products = pr.get("result", [])
+                            names = [
+                                (p.get("PRODUCT_NAME") or "").lower()
+                                for p in products
+                            ]
+                            has_full = any("повний комплект" in n for n in names)
+                            has_fee  = any("організаційний внесок" in n for n in names)
+                            if not has_full and not has_fee:
+                                missing_bx.append({
+                                    "id": deal_id,
+                                    "title": deal.get("TITLE", ""),
+                                })
+                        except Exception:
+                            pass
+
+                    if data.get("next") is None or len(deals) < 50:
+                        break
+                    start = data["next"]
+
+            if missing_bx:
+                # Витягуємо домен із webhook для побудови посилань
+                import re as _re
+                m = _re.match(r"(https?://[^/]+)", hook)
+                bx_domain = m.group(1) if m else ""
+
+                st.warning(f"**{len(missing_bx)} угод без «Організаційний внесок»:**")
+                for d in missing_bx:
+                    link = f"{bx_domain}/crm/deal/details/{d['id']}/" if bx_domain else str(d["id"])
+                    st.markdown(f"- [{d['id']} — {d['title']}]({link})")
+            elif missing_bx == []:
+                st.success("✅ Всі угоди мають «Організаційний внесок»!")
+
+    # ── Довідка по товарах ───────────────────────────────────────────────────
+    st.markdown("---")
+    with st.expander("📋 Довідка по товарах", expanded=False):
+        st.markdown("""
+**Обов'язкові товари в угоді:**
+
+| Пакет | Організаційний внесок | Диплом | Подяка |
+|---|:---:|:---:|:---:|
+| Диплом в друк. вигляді (90 грн) | ✅ | ✅ | — |
+| Подяка керівнику (90 грн) | ✅ | — | ✅ |
+| Повний комплект (590 грн) | — | ✅ | ✅ |
+| Тільки електронні версії (190 грн) | ✅ | — | — |
+
+**Правила:**
+- «Організаційний внесок» — обов'язковий для всіх, **крім «Повний комплект нагород»**
+- Без «Організаційний внесок» учасник **не потрапляє** в таблицю онлайн-дипломів на сайті
+- «Повний комплект» вже включає всі нагороди
+        """)
+
     st.markdown("---")
     st.markdown(
         "<small>ТЗ v8.1 · Excel-пріоритет · [agent_druk.py](https://github.com)</small>",
